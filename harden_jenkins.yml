@@ -1,0 +1,89 @@
+﻿---
+- name: Durcir la VM Jenkins
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+    - name: Desactiver le shell interactif de Jenkins
+      ansible.builtin.user:
+        name: jenkins
+        shell: /usr/sbin/nologin
+
+    - name: Restreindre le dossier personnel
+      ansible.builtin.file:
+        path: /var/lib/jenkins
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0700'
+
+    - name: Installer le pare-feu et les mises a jour automatiques
+      ansible.builtin.apt:
+        name:
+          - ufw
+          - unattended-upgrades
+        state: present
+        update_cache: true
+
+    - name: Configurer les mises a jour automatiques
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: '0644'
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    - name: Activer les timers APT
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+
+    - name: Configurer SSH par cle uniquement
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/00-jenkins-hardening.conf
+        mode: '0644'
+        content: |
+          PermitRootLogin no
+          PubkeyAuthentication yes
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+      notify: Recharger SSH
+
+    - name: Valider la configuration SSH
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+    - name: Autoriser SSH et Jenkins avant activation du pare-feu
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/ufw
+          - allow
+          - "{{ item }}"
+      loop:
+        - 22/tcp
+        - 8080/tcp
+      register: ufw_allow
+      changed_when: "'Skipping' not in ufw_allow.stdout"
+
+    - name: Refuser les connexions entrantes par defaut
+      ansible.builtin.command: /usr/sbin/ufw default deny incoming
+      changed_when: false
+
+    - name: Autoriser les connexions sortantes
+      ansible.builtin.command: /usr/sbin/ufw default allow outgoing
+      changed_when: false
+
+    - name: Activer UFW
+      ansible.builtin.command: /usr/sbin/ufw --force enable
+      changed_when: false
+
+  handlers:
+    - name: Recharger SSH
+      ansible.builtin.systemd:
+        name: ssh
+        state: reloaded
