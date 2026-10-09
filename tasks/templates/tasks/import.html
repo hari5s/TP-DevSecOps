@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <title>Importer des tâches</title>
+</head>
+<body>
+    <h1>Importer des tâches</h1>
+    <p>Format attendu : une liste JSON de titres.</p>
+    <form method="post">
+        {% csrf_token %}
+        <label for="tasks_data">Titres des tâches</label>
+        <textarea id="tasks_data" name="tasks_data" required></textarea>
+        <button type="submit">Importer</button>
+    </form>
+</body>
+</html>
