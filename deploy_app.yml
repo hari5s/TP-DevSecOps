@@ -1,11 +1,11 @@
-﻿---
+---
 - name: Deployer la Todolist
   hosts: "{{ target }}"
   become: true
 
   vars:
     app_dir: /home/admin/to-do-list-unsecure
-    source_repo: https://github.com/gaeldb/to-do-list-unsecure.git
+    source_repo: https://github.com/hari5s/TP-DevSecOps.git
 
   pre_tasks:
     - name: Verifier la cible et la branche
@@ -16,22 +16,63 @@
           - target != 'app-prod1' or branch == 'main'
         fail_msg: "Cible invalide ou branche autre que main en production."
 
-    - name: Verifier le venv du J1
+    - name: Verifier le venv existant
       ansible.builtin.stat:
         path: "{{ app_dir }}/.venv/bin/python"
       register: app_python
 
-    - name: Verifier que le deploiement initial existe
+    - name: Verifier le deploiement initial
       ansible.builtin.assert:
         that:
           - app_python.stat.exists
-        fail_msg: "L'application du J1 doit etre installee sur cette VM."
 
   tasks:
     - name: Installer Git
       ansible.builtin.apt:
         name: git
         state: present
+
+    - name: Creer la configuration secrete si absente
+      ansible.builtin.shell: |
+        umask 077
+        /usr/bin/python3 - <<'PY'
+        import secrets
+        from pathlib import Path
+        Path("/etc/todolist.env").write_text(
+            "DJANGO_SECRET_KEY=" + secrets.token_urlsafe(64) + "\n"
+        )
+        PY
+      args:
+        creates: /etc/todolist.env
+      no_log: true
+
+    - name: Proteger la configuration secrete
+      ansible.builtin.file:
+        path: /etc/todolist.env
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Lire la configuration pour les migrations
+      ansible.builtin.slurp:
+        src: /etc/todolist.env
+      register: django_env
+      no_log: true
+
+    - name: Creer le dossier de configuration du service
+      ansible.builtin.file:
+        path: /etc/systemd/system/todolist.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Injecter les variables dans le service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/todolist.service.d/environment.conf
+        mode: "0644"
+        content: |
+          [Service]
+          EnvironmentFile=/etc/todolist.env
+          Environment="DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,{{ ansible_host }}"
 
     - name: Creer un dossier temporaire
       become_user: admin
@@ -42,7 +83,7 @@
 
     - name: Mettre a jour l'application
       block:
-        - name: Recuperer la branche demandee
+        - name: Recuperer la branche corrigee
           become_user: admin
           ansible.builtin.git:
             repo: "{{ source_repo }}"
@@ -54,7 +95,7 @@
           ansible.builtin.debug:
             msg: "Cible={{ target }} Branche={{ branch }} Commit={{ checkout.after }}"
 
-        - name: Creer une archive du code versionne
+        - name: Creer une archive du code
           become_user: admin
           ansible.builtin.command:
             argv:
@@ -79,7 +120,15 @@
               - .env
               - requirements-deploiement.txt
 
-        - name: Installer les dependances du J1
+        - name: Copier les versions de dependances validees
+          ansible.builtin.copy:
+            src: requirements-deploiement.txt
+            dest: "{{ app_dir }}/requirements-deploiement.txt"
+            owner: admin
+            group: admin
+            mode: "0644"
+
+        - name: Installer les dependances corrigees
           become_user: admin
           ansible.builtin.pip:
             requirements: "{{ app_dir }}/requirements-deploiement.txt"
@@ -87,6 +136,9 @@
 
         - name: Appliquer les migrations Django
           become_user: todolist
+          environment:
+            DJANGO_SECRET_KEY: "{{ (django_env.content | b64decode).split('=', 1)[1] | trim }}"
+            DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,{{ ansible_host }}"
           ansible.builtin.command:
             argv:
               - "{{ app_dir }}/.venv/bin/python"
@@ -94,10 +146,12 @@
               - migrate
               - --noinput
             chdir: "{{ app_dir }}"
+          no_log: true
 
         - name: Redemarrer Todolist
           ansible.builtin.systemd:
             name: todolist
+            daemon_reload: true
             state: restarted
             enabled: true
 
