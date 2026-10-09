@@ -9,16 +9,15 @@
 		<input class="btn btn-info" type="submit" name="Create Task">
 	</form>
 
-	<!-- TODO: {{task.title|safe}} desactive l'echappement XSS : a corriger -->
 	<div class="todo-list">
 	{% for task in tasks %}
 		<div class="item-row">
 			<a class="btn btn-sm btn-info" href = "{% url 'update_task' task.id %}">Update</a>
 			<a class="btn btn-sm btn-danger" href = "{% url 'delete' task.id %}">Delete</a>
 			{% if task.complete == True %}
-			<strike>{{task.title|safe}}</strike>
+			<s>{{task.title}}</s>
 			{% else %}
-			<span>{{task.title|safe}}</span>
+			<span>{{task.title}}</span>
 			{% endif %}
 
 		</div>
