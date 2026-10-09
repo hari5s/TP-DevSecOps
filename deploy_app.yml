@@ -1,0 +1,117 @@
+﻿---
+- name: Deployer la Todolist
+  hosts: "{{ target }}"
+  become: true
+
+  vars:
+    app_dir: /home/admin/to-do-list-unsecure
+    source_repo: https://github.com/gaeldb/to-do-list-unsecure.git
+
+  pre_tasks:
+    - name: Verifier la cible et la branche
+      ansible.builtin.assert:
+        that:
+          - target in ['app-dev', 'app-prod1']
+          - branch | length > 0
+          - target != 'app-prod1' or branch == 'main'
+        fail_msg: "Cible invalide ou branche autre que main en production."
+
+    - name: Verifier le venv du J1
+      ansible.builtin.stat:
+        path: "{{ app_dir }}/.venv/bin/python"
+      register: app_python
+
+    - name: Verifier que le deploiement initial existe
+      ansible.builtin.assert:
+        that:
+          - app_python.stat.exists
+        fail_msg: "L'application du J1 doit etre installee sur cette VM."
+
+  tasks:
+    - name: Installer Git
+      ansible.builtin.apt:
+        name: git
+        state: present
+
+    - name: Creer un dossier temporaire
+      become_user: admin
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: todolist-deploy-
+      register: release
+
+    - name: Mettre a jour l'application
+      block:
+        - name: Recuperer la branche demandee
+          become_user: admin
+          ansible.builtin.git:
+            repo: "{{ source_repo }}"
+            dest: "{{ release.path }}/source"
+            version: "{{ branch }}"
+          register: checkout
+
+        - name: Afficher le commit deploye
+          ansible.builtin.debug:
+            msg: "Cible={{ target }} Branche={{ branch }} Commit={{ checkout.after }}"
+
+        - name: Creer une archive du code versionne
+          become_user: admin
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ release.path }}/source"
+              - archive
+              - --format=tar
+              - "--output={{ release.path }}/code.tar"
+              - HEAD
+
+        - name: Installer le code en conservant la base et le venv
+          ansible.builtin.unarchive:
+            src: "{{ release.path }}/code.tar"
+            dest: "{{ app_dir }}"
+            remote_src: true
+            owner: admin
+            group: admin
+            exclude:
+              - db.sqlite3
+              - .venv
+              - .env
+              - requirements-deploiement.txt
+
+        - name: Installer les dependances du J1
+          become_user: admin
+          ansible.builtin.pip:
+            requirements: "{{ app_dir }}/requirements-deploiement.txt"
+            virtualenv: "{{ app_dir }}/.venv"
+
+        - name: Appliquer les migrations Django
+          become_user: todolist
+          ansible.builtin.command:
+            argv:
+              - "{{ app_dir }}/.venv/bin/python"
+              - manage.py
+              - migrate
+              - --noinput
+            chdir: "{{ app_dir }}"
+
+        - name: Redemarrer Todolist
+          ansible.builtin.systemd:
+            name: todolist
+            state: restarted
+            enabled: true
+
+        - name: Verifier la reponse HTTP locale
+          ansible.builtin.uri:
+            url: http://127.0.0.1/
+            status_code: 200
+          register: health
+          until: health.status == 200
+          retries: 10
+          delay: 3
+
+      always:
+        - name: Supprimer les fichiers temporaires
+          ansible.builtin.file:
+            path: "{{ release.path }}"
+            state: absent
