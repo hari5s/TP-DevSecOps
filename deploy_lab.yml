@@ -14,7 +14,7 @@
           - target == 'app-dev'
           - branch == 'main'
           - target != 'app-prod1' or branch == 'main'
-        fail_msg: "Cible invalide ou branche autre que main en production."
+        fail_msg: "Le labo J3 autorise uniquement app-dev et la branche main."
 
     - name: Verifier le venv existant
       ansible.builtin.stat:
@@ -107,7 +107,7 @@
               - "--output={{ release.path }}/code.tar"
               - HEAD
 
-        - name: Arreter Todolist avant remplacement de la base
+        - name: Arreter Todolist avant le remplacement
           ansible.builtin.systemd:
             name: todolist
             state: stopped
@@ -133,7 +133,7 @@
               - .env
               - requirements-deploiement.txt
 
-        - name: Autoriser le service a utiliser la base du labo
+        - name: Donner au service l'acces a la base du labo
           ansible.builtin.file:
             path: "{{ app_dir }}/db.sqlite3"
             owner: todolist
@@ -189,3 +189,7 @@
           ansible.builtin.file:
             path: "{{ release.path }}"
             state: absent
+        - name: Relancer Todolist meme si le deploiement echoue
+          ansible.builtin.systemd:
+            name: todolist
+            state: started
